@@ -1,0 +1,138 @@
+---
+title: "Geoanalisis Aplicado contagios Covid-19"
+subtitle: "Caso Valparaiso"
+author: "José Luis Toro"
+date: "25 de Junio de 2020"
+output:
+  html_document:
+    theme: paper
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+editor_options:
+  chunk_output_type: console
+---
+
+### Configuracion
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, comment = NA, warning = FALSE)
+
+setwd('D:/Trabajo R/Valparaiso')
+getwd()
+```
+
+#### Instalar packages
+
+```{r}
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+# usage
+
+packages <- c("rgdal","sf", "raster", # manejo de datos espaciales
+              "ggmap", # Geocodificacion
+              "ggplot2", "viridis", # cartografias estaticas
+              "digest","leaflet","RColorBrewer", # cartografias dinamicas
+              "spatstat", "spdep", "gstat", # analisis estadistico espacial
+              "leaps", "plyr","dplyr", # manipulacion y organizacion de datos
+              "xlsx","leaflet.extras") #excel
+ipak(packages)
+library(leaflet.extras)
+```
+
+##VISUALIZACION
+### 1.- Carga y preparacion de datos
+```{r}
+## Cargar mas datos de casos confirmados
+dataCONFTotal <- read.csv(file = "Valparaiso_hasta26_con_geo_ok.csv", header = TRUE,sep=';', stringsAsFactors = FALSE)
+
+View(dataCONFTotal)
+### Acá filtramos por la Comuna que analizaremos
+dataPot <- subset(dataCONFTotal,dataCONFTotal$semana_epidemiologica<=26 )
+```
+#dataPot <- dataCONFTotal
+View(dataPot)
+### 2.- Transformacion de los datos a puntos espaciales usando las coordenadas provistas en los datos 
+```{r warning=FALSE, fig.height=8, fig.width=8}
+### latlon, Utilizado a escala mundial y por los datos espaciales de google
+crs_latlon <- "+proj=longlat +datum=WGS84 +no_defs"
+
+# Utilizamos utm
+### utm, utilizado a nivel regional (depende de la zona y hemisferio)
+crs_utm <- "+proj=utm +zone=19 +south +datum=WGS84 +units=m +no_defs +ellps=WGS84 +towgs84=0,0,0"
+
+# Crear puntos espaciales en formato sp
+xy <- dataPot[,c("LON","LAT")]
+dataPot_sp <- SpatialPointsDataFrame(coords = xy, data = dataPot, proj4string = CRS(crs_latlon))
+
+
+xy <- dataBen[,c("LON","LAT")]
+dataBen_sp <- SpatialPointsDataFrame(coords = xy, data = dataBen, proj4string = CRS(crs_latlon))
+```
+### 3.- Generacion de un mapa de hotspots de potenciales y beneficiarios usando el procedimiento de Kernel de densidad
+```{r warning=FALSE, fig.height=8, fig.width=8}
+# Registrar coordenadas contenedoras de la data espacial
+dataPot_sp <- spTransform(dataPot_sp, CRS(crs_utm))
+
+dataBen_sp <- spTransform(dataBen_sp, CRS(crs_utm))
+
+extPot <- extent(dataPot_sp)    
+x_min <- extPot[1]  - 500
+x_max <- extPot[2] + 500
+y_min <- extPot[3] - 500
+y_max <- extPot[4] + 500
+wPot <- as.owin(c(x_min,x_max, y_min, y_max)) # ventana que define espacio de trabajo
+
+# generar mapas de calor
+# base de puntos
+ptsPot <- coordinates(dataPot_sp)
+pPot <- ppp(ptsPot[,1], ptsPot[,2], window = wPot)
+
+# densidad calculada en radio un cuarto
+dens_Pot <- stats::density(pPot,  adjust=0.25)
+dev.off()
+plot(dens_Pot, main='Hotspot de Confirmados Covid')
+
+ptsBen <- coordinates(dataBen_sp)
+pBen <- ppp(ptsBen[,1], ptsBen[,2], window = wPot)#<----Se utiliza la misma ventana de potenciales
+
+# densidad calculada en radio un cuarto
+dens_Ben <- stats::density(pBen,  adjust=0.05)
+
+dev.off()
+plot(dens_Ben, main='Hotspot de Beneficiarios PBSV')
+```
+### 4.- Visualizacion de mapa interactivo de varias capas
+```{r}
+RastPot <- raster(dens_Pot, crs = crs_utm)
+
+RastBen <- raster(dens_Ben, crs = crs_utm)
+# paleta de colores
+pal2 <- colorNumeric(c("#FFFFCC", "#ff4dd2", "#b30086"), values(RastPot),
+  na.color = "transparent")
+pal3 <- colorNumeric(c("#FFFFCC", "#ff4dd2", "#b30086"), values(RastBen),
+  na.color = "transparent")
+
+#install.packages("leaflet")
+#library(leaflet)
+#gc()
+leaflet() %>% 
+    # Base groups
+  addTiles(group = "OSM (default)") %>%
+  addProviderTiles(providers$CartoDB.Positron)%>%
+  addProviderTiles(providers$Esri.WorldImagery, group = "Satellite")%>%
+  addRasterImage(RastPot, colors = pal2, opacity = 0.5, group = "RasterConf") %>%
+  leaflet.extras::addWebGLHeatmap( lng=dataPot$LON, lat=dataPot$LAT, size = 200, group = "HeatmapConf") %>%
+ addLayersControl(
+    baseGroups = c("OSM (default)", "Satellite"),
+    overlayGroups = c( "RasterConf", "HeatmapConf"),
+    options = layersControlOptions(collapsed = TRUE))
+```
+
+
+ 
